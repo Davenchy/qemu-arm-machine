@@ -1,0 +1,7 @@
+::sysinit:/etc/init.d/rcS
+::askfirst:-/sbin/getty 115200 console
+#::askfirst:-/bin/sh
+::ctrlaltdel:/sbin/reboot
+::shutdown:/etc/init.d/shutdown
+::restart:/sbin/init
+::restart:/etc/init.d/restart

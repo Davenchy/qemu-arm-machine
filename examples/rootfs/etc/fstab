@@ -1,0 +1,9 @@
+# <device>	<mountpoint>	<type>		<options> <dump> <fsck>
+none	/dev				devtmpfs	defaults 0 0
+none	/proc				proc		defaults 0 0
+none	/sys				sysfs		defaults 0 0
+
+/dev/mmcblk0p1	/boot		vfat		defaults 0 2
+/dev/mmcblk0p2	/			ext4		defaults 0 1
+
+# vim: set ft=fstab ts=4 noet

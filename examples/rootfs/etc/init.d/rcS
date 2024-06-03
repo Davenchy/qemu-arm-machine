@@ -1,0 +1,26 @@
+#!/bin/sh
+
+# create required directories
+mkdir -p /proc /sys /root /home
+
+# mount all devices in fstab
+mount -a
+
+# in case of restarting the init process
+# remount / and /dev in rw mode.
+
+mount -o remount,rw /
+mount -o remount,rw /dev
+
+#=== hostname ===#
+#
+# get the hostname from /etc/hostname file if exists
+[ -f /etc/hostname ] && HOSTNAME="$(cat /etc/hostname)"
+
+# if no hostname file then set QEMU_MACHINE as a default hostname
+[ -z "$HOSTNAME" ] && HOSTNAME=QEMU_MACHINE
+
+# set the hostname
+hostname "$HOSTNAME"
+
+clear

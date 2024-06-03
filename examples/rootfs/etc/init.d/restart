@@ -1,0 +1,3 @@
+#!/bin/sh
+# runs on init process restart
+mount -a -rw

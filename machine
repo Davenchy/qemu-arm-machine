@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# Basic script to start a qemu machine
+
+UBOOT="uboot"
+SD="sdcard.img"
+
+MNT="mnt"
+MNT_ROOT_FS="$MNT/rootfs"
+MNT_BOOT="$MNT/boot"
+MNT_LODEV="$MNT/lodev"
+
+EXAMPLES="examples"
+
+# check if qemu-system-arm is installed otherwise exit
+command -v qemu-system-arm &> /dev/null || {
+  echo "Please install qemu-system-arm!"
+  exit 1
+}
+
+# check if parted is installed otherwise exit
+command -v parted &> /dev/null || {
+  echo "Please install parted!"
+  exit 1
+}
+
+# run command as root
+function run_as_root {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+# boot the system using qemu-system-arm
+function boot {
+  # check if sdcard is mounted
+  [ -d "$MNT" ] && {
+    echo "Looks like $SD is already mounted at $MNT/"
+    echo "If you think it is not, please remove $MNT/ first!"
+    exit 1
+  }
+
+  # start the qemu machine
+  qemu-system-arm -M vexpress-a9 -m 128M -nographic -kernel "$UBOOT" \
+    -sd "$SD"
+}
+
+# mount the sdcard
+function mount_sdcard {
+  [ -d "$MNT" ] && {
+    echo "Looks like $SD is already mounted at $MNT/"
+    echo "If you think it is not, please remove $MNT/ first!"
+    exit 1
+  }
+
+  # setup loop device for the sdcard
+  dev="$(run_as_root losetup -f --show --partscan $SD)"
+  echo "Loop Device: $dev"
+
+  [ -z "$dev" ] && {
+    echo "Failed to setup loop device!"
+    exit 1
+  }
+
+  # create mountpoints
+  mkdir -p "$MNT_BOOT" "$MNT_ROOT_FS"
+  # change  owner
+  for f in "$MNT_BOOT" "$MNT_ROOT_FS"; do run_as_root chown 0:0 "$f"; done
+
+  # mount
+  run_as_root mount -o rw "$dev"p1 "$MNT_BOOT"
+  run_as_root mount -o rw "$dev"p2 "$MNT_ROOT_FS"
+
+  # set the lock file `lodev`
+  echo "$dev" > "$MNT_LODEV"
+  run_as_root chown 0:0 "$MNT_LODEV"
+  run_as_root chmod 644 "$MNT_LODEV"
+}
+
+# unmount the sdcard
+function umount_sdcard {
+  if [ ! -d "$MNT" ] || [ ! -f "$MNT_LODEV" ]; then
+    echo "$SD is not mounted!"
+    exit 1
+  fi
+
+  for f in "$MNT_BOOT" "$MNT_ROOT_FS"; do run_as_root umount -f "$f"; done
+  run_as_root losetup -d "$(cat $MNT_LODEV)"
+  run_as_root rm -rf "$MNT"
+}
+
+# generate a basic sdcard image
+function generate {
+  # check if sdcard is mounted
+  [ -d "$MNT" ] && {
+    echo "Looks like $SD is already mounted at $MNT/"
+    echo "If you think it is not, please remove $MNT/ first!"
+    exit 1
+  }
+
+  # check if sdcard is found
+  [ -f "$SD" ] && {
+    echo "SDCard $SD was found!"
+    read -rs -n1 -p "Press a key to remove and regenerate it!"
+    echo
+    rm -f "$SD"
+  }
+
+  clear
+
+  echo "Create empty image of size 1GB -> $SD"
+  echo
+  dd if=/dev/zero of="$SD" bs=1M count=1024 status=progress
+
+  echo
+  echo "Create a new partition table of label msdos on $SD"
+  echo
+  parted "$SD" mktable msdos
+
+  echo "Create boot partition of type fat16 and size 10MiB"
+  echo
+  parted "$SD" mkpart primary fat16 1MiB 10MiB
+
+  echo "Create rootfs partition of type ext4 that takes the rest of the image"
+  echo
+  parted "$SD" mkpart primary ext4 10MiB 100%
+
+  echo
+  echo "Attach $SD to loop device"
+  LODEV="$(run_as_root losetup -f --show --partscan $SD)"
+  echo "Loop Device: $LODEV"
+  echo
+
+  [ -z "$LODEV" ] && {
+    echo "Failed to setup loop device!"
+    exit 1
+  }
+
+  echo "Make FATfs on the boot partition on ${LODEV}p1"
+  echo
+  run_as_root mkfs.fat -F16 -n BOOT "$LODEV"p1
+
+  echo
+  echo "Make ext4fs on the rootfs partition on ${LODEV}p2"
+  echo
+  run_as_root mkfs.ext4 "$LODEV"p2
+
+  echo
+  echo "Deattach loop device: $LODEV"
+  echo
+  run_as_root losetup -d "$LODEV"
+
+  echo
+  echo "Mount and copy example files"
+  echo
+  mount_sdcard
+
+  run_as_root mkdir -v "$MNT_ROOT_FS/etc"
+  run_as_root mkdir -v "$MNT_ROOT_FS/dev"
+  run_as_root mkdir -v "$MNT_ROOT_FS/root"
+
+  [ -d "$EXAMPLES/boot" ] && {
+    echo
+    echo "Coping boot example files to the root partition"
+    echo "$EXAMPLES/boot -> $MNT"
+    echo
+    run_as_root chmod -v o+w "$MNT_BOOT"
+    run_as_root cp -rvf "$EXAMPLES/boot/"* "$MNT/boot"
+    run_as_root chmod -v o-w "$MNT_BOOT"
+  }
+
+  [ -d "$EXAMPLES/rootfs" ] && {
+    echo
+    echo "Coping rootfs example files to the rootfs partition"
+    echo "$EXAMPLES/rootfs -> $MNT"
+    echo
+    run_as_root chmod -v o+w "$MNT_ROOT_FS"
+    run_as_root cp -rvf "$EXAMPLES/rootfs/"* "$MNT/rootfs"
+    run_as_root chmod -v o-w "$MNT_ROOT_FS"
+  }
+
+  echo
+  echo "Set owner to root:root"
+  run_as_root chown -v -R 0:0 "$MNT"
+
+  echo
+  echo "$SD is ready for use!"
+  echo "Copy the necessary kernel files into the sdcard:"
+  echo
+  echo "uboot -> ./"
+  echo
+  echo "zImage -> mnt/boot/"
+  echo "vexpress-v2p-ca9.dtb -> mnt/boot/"
+  echo
+  echo "busybox_output -> mnt/rootfs/"
+  echo "toolchain_sysroot -> mnt/rootfs/"
+  echo
+  echo "After coping required resources execute:"
+  echo "$ $0 umount  # to unmount the sdcard"
+  echo
+  echo "Then"
+  echo "$ $0 boot  # to start booting the qemu machine"
+}
+
+case "$1" in
+  "boot") boot;;
+  "mount") mount_sdcard;;
+  "umount") umount_sdcard;;
+  "generate") generate;;
+  *)
+    echo "Usage: $0 {boot|mount|umount|generate}"
+    echo "Check the README.md file for more information."
+    exit 1
+  ;;
+esac
+

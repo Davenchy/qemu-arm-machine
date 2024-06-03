@@ -1,0 +1,5 @@
+#!/bin/sh
+# runs on shutdown
+
+# unmount add mounted devices if possible otherwise remount in read-only mode.
+umount -a -r
